@@ -1,0 +1,31 @@
+[package]
+name = "skribe"
+description = "Skribe desktop application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The app crate only wires services to commands. It has no tests of its own: logic lives in
+# the library crates, which do not link the webview and so test the same way on every platform.
+[lib]
+name = "skribe_app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+test = false
+doctest = false
+
+[[bin]]
+name = "skribe"
+path = "src/main.rs"
+test = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+skribe-ipc.workspace = true
+skribe-store.workspace = true
+tauri = { version = "2", features = [] }
+
+[lints]
+workspace = true

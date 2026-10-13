@@ -1,0 +1,4 @@
+# Check out LF everywhere so generated files and lockfile hashes match across WSL and Windows.
+* text=auto eol=lf
+*.png binary
+*.ico binary

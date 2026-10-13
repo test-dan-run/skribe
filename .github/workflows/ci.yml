@@ -1,0 +1,91 @@
+# One job, strictly in sequence: the installer is built only from a revision that has just
+# passed every check, in the same workspace. Limits and their reasons are in docs/ci.md.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Build parallelism limit (docs/ci.md).
+  CARGO_BUILD_JOBS: "4"
+
+defaults:
+  run:
+    # bash runs with -e -o pipefail, so any failing command stops the job.
+    shell: bash
+
+jobs:
+  check-and-package:
+    name: Check and package (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Node from .node-version
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install Rust from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustc --version --verbose
+          cargo --version
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Frontend tests
+        run: npm test
+
+      # The app crate embeds the frontend bundle at compile time, so clippy needs dist/.
+      - name: Build frontend bundle
+        run: npm run build
+
+      - name: Rust formatting
+        run: npm run rust:fmt
+
+      - name: Clippy (warnings denied)
+        run: npm run rust:clippy
+
+      # Also fails if src/ipc/generated is out of date with the Rust command contract.
+      - name: Rust tests
+        run: npm run rust:test
+
+      # The only release compile in CI.
+      - name: Build NSIS installer
+        run: npx tauri build --ci -- --locked
+
+      - name: Checksums, manifests and budgets
+        run: node scripts/ci/package-manifests.mjs
+
+      - name: Upload installer, checksums and manifests
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: skribe-windows-x64-unsigned-${{ github.sha }}
+          path: target/ci-artifacts/
+          if-no-files-found: error
+          retention-days: 30

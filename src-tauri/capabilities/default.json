@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window may call Skribe's own commands and nothing else. It has no file system, shell, HTTP or opener access.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-library-status",
+    "allow-library-retry-open",
+    "allow-library-restore-snapshot"
+  ]
+}
