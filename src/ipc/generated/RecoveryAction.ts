@@ -3,4 +3,4 @@
 /**
  * A recovery the app itself can carry out when the user asks for it.
  */
-export type RecoveryAction = "retry_open" | "restore_snapshot";
+export type RecoveryAction = "retry_open" | "restore_snapshot" | "reload";

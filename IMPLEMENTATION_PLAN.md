@@ -4,9 +4,12 @@ This plan turns the requirements in [AGENTS.md](AGENTS.md) into an ordered build
 remains the source of requirements; where this plan and AGENTS.md disagree, AGENTS.md wins and
 this plan must be corrected.
 
-**Status (2026-10-14):** Phases 0 and 1 are implemented, except that the CI workflow has not yet
-run on a hosted Windows runner. Later phases are not started. Section 3.8 records what the first
-two phases established, and each later phase in section 4 lists what it must take note of.
+**Status (2026-10-14):** Phases 0 to 3 are implemented. The CI workflow has had one green run on
+a hosted Windows runner, against Phases 0 and 1; Phases 2 and 3 have not yet been through it.
+Phase 3 is built and tested against a synthetic backend, but its Windows spike has not been done
+and it has never recorded from a real device. Later phases are not started. Section 3.8 records
+what the first four phases established, and each later phase in section 4 lists what it must
+take note of.
 
 ## 1. Starting point
 
@@ -16,7 +19,8 @@ two phases established, and each later phase in section 4 lists what it must tak
   things that were not in this repository:
   - "Retain this stack, its lockfiles and module boundaries": Phase 0 created them.
   - "Preserve established rules for tied events, zero and end boundaries, and the initial
-    boundary": still not recorded anywhere; Phase 2 records them (D6).
+    boundary": Phase 2 recorded them in `docs/timeline-rules.md`, and the owner confirmed
+    them on 2026-10-14 (D6).
   - "Retain ... one compiler/CMake job and the documented hosted-runner resource limits":
     Phase 0 created the workflow and `docs/ci.md`; the limits await review (D5).
 - The owner confirmed on 2026-10-13 that no earlier code, design or CI exists. The project is
@@ -24,14 +28,22 @@ two phases established, and each later phase in section 4 lists what it must tak
 
 ## 2. Decisions
 
-### 2.1 Decided (2026-10-13)
+### 2.1 Decided
+
+D1 to D5 were decided on 2026-10-13. D6, D13 and D15 to D17 were decided on 2026-10-14, after
+Phases 2 and 3 had been built on the recommendations.
 
 | # | Decision | Outcome |
 |---|----------|---------|
 | D1 | Product name and Tauri bundle identifier | Product "Skribe", identifier `com.skribe.app`. The identifier fixes the app data location (storage identity) and must not change after the first distributed build. AGENTS.md was renamed from "Scribe" to match |
 | D2 | JavaScript package manager | npm; `package-lock.json` is the only JavaScript lockfile |
 | D4 | Meaning of "one compiler/CMake job" | One sequential CI job on a Windows runner runs all checks and performs the only release compile (Rust, bundled C such as SQLite, and any CMake-built dependency). CI does not build inference runtimes from source |
-| D5 | Hosted-runner resource limits | Proposed in `docs/ci.md` during Phase 0 (runner size, job timeout, build parallelism, disk budget) for the owner's review; that file is then "the documented limits". Written but not yet reviewed, and not yet exercised by a run |
+| D5 | Hosted-runner resource limits | Proposed in `docs/ci.md` during Phase 0 (runner size, job timeout, build parallelism, disk budget) for the owner's review; that file is then "the documented limits". Written and exercised by one green run (6 minutes 25 seconds); the owner's review is still open |
+| D6 | Timeline tie and boundary rules | The rules in section 3.5, with two additions set out in `docs/timeline-rules.md`: a moved boundary stays between its neighbours, and a review edit cannot create a tie |
+| D13 | Behaviour when a capture device disappears mid-recording | The healthy track keeps recording, the lost track is marked failed from that timestamp, and no device is switched in |
+| D15 | Closing the window while recording | The window refuses to close and says why; the user stops the recording, which finalises both tracks |
+| D16 | Which devices are recorded | A setting. For each track the user chooses the Windows default device, the Windows default communications device, or one specific device. A chosen device that is not connected refuses the start; nothing is recorded in its place. Both tracks follow the Windows default until chosen |
+| D17 | What trash does with files | A flag on the meeting; rows and audio stay in place until permanent deletion, and `trash/` is unused |
 
 ### 2.2 Open
 
@@ -41,14 +53,12 @@ changing the answer is cheap.
 | # | Decision | Recommendation | Needed by |
 |---|----------|----------------|-----------|
 | D3 | Rust layout | Cargo workspace: thin Tauri app crate plus library crates added as phases need them (section 3.1). Phase 0 was built this way; confirmation is still open | Phase 0 |
-| D6 | Timeline tie and boundary rules | Adopt the rules in section 3.5 | Phase 2 |
 | D7 | Library location | Default under the user's local app data; user-selectable folder later, moved only by an explicit, verified migration. Phase 1 uses the default location only; confirmation is still open, and stays cheap until the first distributed build | Phase 1 |
 | D8 | Inference integration | Runtimes are separately installed native executables run as child processes by Rust (section 3.7), not code linked into the app | Phase 6 |
 | D9 | Engines | Whisper-family speech recognition via a whisper.cpp runtime; ONNX-based segmentation and speaker embedding for diarisation; a llama.cpp runtime with a GGUF instruct model for minutes. Confirm with the spike in Phase 6 | Phase 6 |
 | D10 | Where packages are hosted and who builds them | Reviewed catalogue pins upstream release archives by URL, size and SHA-256 where upstream publishes suitable Windows builds; otherwise a separate packaging workflow publishes them | Phase 6 |
 | D11 | Catalogue trust | Catalogue shipped inside the app, plus a user-initiated refresh that is accepted only with a valid signature from a key embedded in the app | Phase 6 |
 | D12 | First-release languages and hardware floor | English first; CPU-only path must work; GPU acceleration is optional and catalogue-gated | Phase 6 |
-| D13 | Behaviour when a capture device disappears mid-recording | Keep the healthy track recording, mark the lost track failed from that timestamp, do not switch devices automatically | Phase 3 |
 | D14 | Reprocessing and manual edits | A new run is a separate result set; the previous run and its edits stay intact; the user explicitly chooses the active run. No automatic transfer of text edits between runs | Phase 8 |
 
 ## 3. Architecture
@@ -71,13 +81,14 @@ src-tauri/                        Tauri app crate: wiring, commands, capabilitie
 crates/
   skribe-domain/                  IDs, states, timeline derivation, staleness. No I/O
   skribe-store/                   SQLite schema, migrations, repositories, library, backup
-  skribe-ipc/                     command names, payload types, typed errors, command handlers;
-                                  no Tauri dependency. Its tests generate src/ipc/generated
+  skribe-ipc/                     command names, payload and event types, typed errors, command
+                                  handlers and the recording service; no Tauri dependency. Its
+                                  tests generate src/ipc/generated
   skribe-audio/                   capture trait, WASAPI backend, track writers, recovery
   skribe-models/                  catalogue, download, verification, install, removal
   skribe-pipeline/                job runner, stages, checkpoints, runtime supervision
 catalogue/                        reviewed catalogue metadata and its schema
-docs/                             ci.md, storage.md, timeline-rules.md, decisions/
+docs/                             ci.md, storage.md, timeline-rules.md, recording.md
 scripts/                          generate-ipc.mjs, ci/package-manifests.mjs
 .github/workflows/ci.yml
 ```
@@ -116,7 +127,8 @@ Three roots, never nested inside each other or inside the install directory:
   derived/<meeting>/          prepared audio, playback mix, pipeline checkpoints (sensitive)
   backups/                    verified database snapshots, skribe-v<schema>-<time>.sqlite
                               (no audio, no models)
-  trash/                      recoverable deleted meetings
+  trash/                      unused: a meeting in the trash is flagged in the database and its
+                              files stay where they are (D17)
 <models>/                     outside the library and outside the app binaries
   staging/                    partial downloads and unvalidated extractions
   packages/<id>/<version>/    validated, registered packages
@@ -163,13 +175,15 @@ Rules:
   the failed track finalised a valid partial file; otherwise recording is `failed` and the
   healthy data remains reviewable.
 - On startup, any meeting in `recording` or `finalising` with no live session becomes
-  `interrupted` and is offered recovery. Any job in `running` becomes `interrupted` and can
-  resume from its last checkpoint.
+  `interrupted` and is offered recovery. A meeting in `ready` never started capturing and
+  returns to `setup`. Any job in `running` becomes `interrupted` and can resume from its last
+  checkpoint.
 - There is no pause. The state machine has no pause transition, and the UI has no pause control.
 
-### 3.5 Timeline rules (proposed; see D6)
+### 3.5 Timeline rules (decided; see D6)
 
-To be recorded in `docs/timeline-rules.md` and locked with tests once confirmed.
+Recorded in [docs/timeline-rules.md](docs/timeline-rules.md), which also says what each review
+edit does and when it is refused, and locked by unit and property tests in `skribe-domain`.
 
 1. The effective timeline is a pure function of `timeline_events` plus `timeline_overrides`.
    Section membership is never stored; it is derived.
@@ -201,7 +215,8 @@ To be recorded in `docs/timeline-rules.md` and locked with tests once confirmed.
   player through a custom URI scheme handled in Rust that accepts only a meeting ID and track ID
   and supports range requests.
 - Progress and state changes are pushed as typed events. Polling, where used, must not overwrite
-  an error the user has not yet acted on. No event exists yet (section 3.8).
+  an error the user has not yet acted on. Two events exist: `recording-status` and
+  `close-blocked` (section 3.8).
 - Section 3.8 gives the concrete steps for adding a command in the code as built.
 
 ### 3.7 Inference process model (see D8)
@@ -217,7 +232,7 @@ To be recorded in `docs/timeline-rules.md` and locked with tests once confirmed.
 - Runtime output, prompts and checkpoints are meeting content. They go to `derived/`, not to
   application logs. Logs record stage names, durations, counts and error codes only.
 
-### 3.8 Established in Phases 0 and 1
+### 3.8 Established in Phases 0 to 3
 
 Later phases build on the following. Each point is enforced by a test, a lint rule or the
 compiler unless it says otherwise.
@@ -226,9 +241,10 @@ Adding a command:
 
 1. Add the name to `crates/skribe-ipc/src/command_names.rs`. `src-tauri/build.rs` includes that
    file and turns each name into a permission.
-2. Write the handler and its argument and result types in `skribe-ipc`, and add the command to
-   `command_specs` in `bindings.rs`. A command takes no parameter or exactly one named `args`,
-   and returns `Result<T, CommandError>`.
+2. Write the handler and its argument and result types in `skribe-ipc`, and register the
+   command in `contract()` in `bindings.rs` with `command` or `command_with`, in the same order
+   as the name list. A command takes no parameter or exactly one named `args`, and returns
+   `Result<T, CommandError>`.
 3. Add a thin adapter in `src-tauri/src/commands.rs` and list it in `generate_handler!` in
    `src-tauri/src/lib.rs`. Nothing checks this step: a missing adapter fails only when the
    command is called.
@@ -237,32 +253,56 @@ Adding a command:
 
 The Rust tests fail when steps 1, 2, 4 and 5 disagree.
 
+Adding an event:
+
+1. Define the payload type and the event's name as a constant in `skribe-ipc`, and register it
+   in `contract()` with `event`. The generated `Events` type maps the name to the payload.
+2. Emit it from `src-tauri` to the `main` window only. Nothing checks that the name emitted is
+   the registered constant except using the constant.
+3. Listen with `listen()` from `src/ipc`, in a controller hook. The window has
+   `core:event:allow-listen` and `core:event:allow-unlisten` and no other event permission, so
+   it cannot emit.
+
 Errors:
 
-- Storage failures are `StoreError` variants. `crates/skribe-ipc/src/error.rs` maps each one to
-  a `CommandError`: code, message, what was retained, recovery text and the recoveries the app
-  can perform. The mapping is an exhaustive match, so a new variant does not compile until it
-  is described. Add it to `every_store_error` in that file's tests by hand.
+- Storage failures are `StoreError` variants and capture and track-file failures are
+  `AudioError` variants. `crates/skribe-ipc/src/error.rs` maps each one to a `CommandError`:
+  code, message, what was retained, recovery text and the recoveries the app can perform. The
+  mappings are exhaustive matches, so a new variant does not compile until it is described. Add
+  it to `every_store_error` or `every_audio_error` in that file's tests by hand.
 - In the frontend, `call()` in `src/ipc` returns a `CommandResult` and never throws. A
-  controller keeps the original failure on screen when a recovery attempt fails.
+  controller keeps a failure on screen until the next action is attempted; a pushed status
+  update never clears it.
+- A change made against an out-of-date revision is `StoreError::RevisionConflict`, offered with
+  the `reload` recovery. A meeting has one revision covering its title, planned time and agenda.
+- A stored value the code does not recognise is `StoreError::DataInvalid`, never a default.
 
 Where code and tests go:
 
 - The Tauri app crate has no tests and `cargo test` does not build it. Logic behind anything
   registered there (global shortcut, audio URI scheme, window-close handling) belongs in a
-  library crate, where it is tested without a webview.
+  library crate, where it is tested without a webview. The window-close handler asks
+  `RecordingService::is_live` and sends a payload built in `skribe-ipc`.
 - A new crate joins `members` in the root `Cargo.toml` and sets `[lints] workspace = true`. The
-  workspace forbids `unsafe`; a crate that needs it overrides that lint for itself only.
+  workspace forbids `unsafe`, and a forbidden lint cannot be relaxed, so `skribe-audio` repeats
+  the workspace lints in its own `Cargo.toml` with `unsafe_code = "deny"` and allows it in
+  `src/wasapi.rs` alone. Keep the two lint lists in step by hand.
+- `skribe-audio` knows nothing about meetings or the database: callers give it file paths. The
+  recording service that joins it to the store lives in `skribe-ipc`
+  (`recording.rs`), because no other crate may depend on both. It holds its lock only to read
+  or swap state, never across device, database or file work.
+- Lifecycle states are defined once in `skribe-domain` and mirrored for the frontend in
+  `skribe-ipc/src/states.rs`; the mirror stops compiling if either side gains a state. The
+  schema's `CHECK` lists are tested against the same enums.
 - ESLint allows `@tauri-apps/*` imports only in `src/ipc`, and lets `.tsx` components import
-  IPC types but not `call`. Commands are called from controller hooks in `.ts` files.
+  IPC types but not `call` or `listen`. Commands are called from controller hooks in `.ts`
+  files.
 
 Capabilities, events and Content Security Policy:
 
-- The window is granted exactly the app's commands. A test asserts that the capability file
-  lists those and nothing else: no event, window, file, shell, HTTP or opener permission.
-- No typed event exists yet. `library_status` waits for the open attempt to finish instead.
-  The first phase that pushes events grants the event-listen permission, changes that test
-  deliberately, and generates the payload types in `skribe-ipc`.
+- The window is granted exactly the app's commands and the two event-listening permissions. A
+  test asserts that the capability file lists those and nothing else: no window, file, shell,
+  HTTP or opener permission.
 - The policy loads scripts, styles, images, fonts and media only from the app bundle and
   connects only to Tauri's IPC. Inline scripts and injected `<style>` elements are blocked,
   which rules out CSS-in-JS libraries. Any new origin, such as the audio URI scheme, needs its
@@ -270,14 +310,14 @@ Capabilities, events and Content Security Policy:
 - The policy is attached to content served from the app bundle. Under `tauri dev` the window
   loads the Vite server directly, so the policy is not in force there (read from Tauri's
   source, not run). A new UI dependency or origin is checked in a built app: `tauri build`,
-  with or without `--debug`.
+  with or without `--debug`. Phases 2 and 3 were checked this way in a Linux build.
 
 Database:
 
-- Schema 1 holds only `library_meta`. Each phase adds the tables it first needs (section 3.3)
-  as a new SQL file in `crates/skribe-store/migrations/`, appended to `MIGRATIONS` in
-  `migrate.rs`. Shipped entries are never edited. All pending migrations run in one transaction
-  with a foreign-key check before commit.
+- Schema 3. Each phase adds the tables it first needs (section 3.3) as a new SQL file in
+  `crates/skribe-store/migrations/`, appended to `MIGRATIONS` in `migrate.rs`. Shipped entries
+  are never edited. All pending migrations run in one transaction with a foreign-key check
+  before commit.
 - One worker thread owns the connection and runs work serially. `Database::call` is private to
   `skribe-store`; other crates use repository methods added there. Each call is one short
   transaction, because a long one blocks every other command.
@@ -288,27 +328,56 @@ Database:
   frontend. The workspace has no date-time crate.
 - The app process exits without dropping the open library. The database is safe (replaying a
   leftover write-ahead log is tested), but nothing may rely on destructors running at exit.
+- Opening the library settles recordings left running, beside the interrupted-migration
+  recovery, and reports them in the open report. Phase 7 does the same for jobs.
 
 Library behaviour that later data changes:
 
 - Once `audio/`, `derived/`, `backups/` or `trash/` holds anything, a missing database or
-  missing `library.json` stops the app with a recovery screen instead of starting fresh.
+  missing `library.json` stops the app with a recovery screen instead of starting fresh. From
+  Phase 3 that is true of any library with a recording.
 - Nothing removes snapshots or `set-aside-*` folders, and nothing clears `<temp>` yet.
 - A second app instance is told the library is in use. There is no single-instance handoff.
+- A database snapshot taken before a meeting was permanently deleted still holds its title and
+  agenda. The deletion confirmation says so; Phase 10 decides snapshot retention.
+
+Recording (see [docs/recording.md](docs/recording.md)):
+
+- Which device each track is recorded from is a setting with its own revision, saved by
+  `recording_set_devices`. The frontend sends a device identifier only; Rust accepts it only if
+  that device is connected now, and stores the name the system reports. Identifiers are matched
+  against the listed devices and never handed to Windows as a path.
+
+- `RecordingSession::clock()` is the recording's monotonic clock. Phase 4 stamps notes and
+  transitions with it; nothing else may supply live time.
+- The synthetic capture backend is compiled only for tests or with the `synthetic` feature,
+  and a release build that enables it does not compile. `npx tauri dev --features
+  synthetic-capture` runs the recording workflow in WSL.
 
 Frontend:
 
-- Confirmations are inline disclosures that open with focus on Cancel
-  (`src/features/library/LibraryUnavailable.tsx`). jsdom has no `<dialog>.showModal()`, so a
-  modal dialog would be untestable without a polyfill.
-- `src/ui/` does not exist yet. Shared primitives are extracted when a second feature needs one.
+- `src/ui/` holds the shared primitives: `Button` (unavailable buttons stay focusable),
+  `Confirmation` (an inline disclosure that opens with focus on Cancel and returns focus on
+  close), `ErrorNotice` and formatting. jsdom has no `<dialog>.showModal()`, so a modal dialog
+  would be untestable without a polyfill.
+- There is no router. `src/app/Workspace.tsx` holds the current view and asks before leaving a
+  page that reports unsaved text through `onDirtyChange`.
+- The React hooks lint rule rejects reading a ref, or an object that holds one, during render.
+  Keep refs inside the component that owns the element.
+- A reordered list moves rows in the document, which drops focus; the agenda puts it back on
+  the button that was used.
+- Tests mock `src/ipc`. `src/test/ipc.ts` answers commands by name and delivers events.
 - TypeScript is held at 6.0 because `typescript-eslint` does not support 7.
   `eslint-plugin-jsx-a11y` is absent because it does not support ESLint 10.
 
 Verification limits:
 
-- WSL cannot build the installer or compile `cfg(windows)` code. For those, CI is the only
-  check before a Windows machine is used.
+- WSL cannot build the installer or run `cfg(windows)` code. `skribe-audio` alone can be
+  type-checked and linted for Windows in WSL (`cargo clippy -p skribe-audio --target
+  x86_64-pc-windows-msvc`, after `rustup target add`), because it has no C dependency. The
+  rest of the workspace needs the bundled SQLite built for Windows, so CI remains its only
+  Windows compile.
+- No hosted runner has audio devices. Real capture is checked only on a Windows machine.
 
 ## 4. Phases
 
@@ -329,14 +398,13 @@ installer. Phases 3, 6 and 7 start with a short spike because they carry the mos
   runner and uploads installer, checksums and manifests; the installed app opens to an honest
   empty state.
 
-Status: implemented, with the CI exit criterion still open. The empty state was checked in a
-Linux build of the app, not in an installed Windows build. Remaining:
+Status: implemented; the CI exit criterion was met on 2026-10-13 by run 38430911426, green on
+its first attempt. The empty state was checked in a Linux build of the app, not in an installed
+Windows build. Remaining:
 
-- Push and get the first green run. The workflow is untested; the parts most likely to need a
-  fix are `rustup toolchain install` with no arguments, bash as the default shell, and the NSIS
-  download during bundling.
-- Owner review of the limits in `docs/ci.md` (D5), then replace its expected figures with
-  measured ones.
+- Owner review of the limits in `docs/ci.md` (D5). The measured step times are now recorded
+  there; the measured `target/` and installer sizes are in the run's build manifest and were
+  not read back.
 - Install the CI artifact on Windows and confirm it opens to the empty state.
 - Replace the placeholder icon `src-tauri/app-icon.png` and regenerate with `npx tauri icon`
   before the first distributed build.
@@ -376,6 +444,18 @@ Status: implemented; exit criteria met in WSL. Gaps handed to Phase 10:
 - Implement section 3.5 in `skribe-domain` with unit and property tests, ahead of its first use.
 - Exit: a meeting with an agenda survives restart; revision conflicts are reported, not
   overwritten; the timeline rule tests pass.
+
+Status: implemented; exit criteria met in WSL, and the screens were exercised in a built Linux
+app (create, agenda add and reorder, settings, list). Not yet through CI. Gaps and choices:
+
+- Trash is a flag; files stay in place (D17).
+- The section shortcut is validated and stored. The settings screen says it is not acted on.
+- The meeting list is loaded whole, newest first, with no paging or search. Revisit when
+  libraries grow past a few hundred meetings.
+- After a meeting is moved to the trash its row is gone, so keyboard focus falls back to the
+  page. The change is announced; moving focus deliberately is left to the Phase 10 audit.
+- The unsaved-changes guard covers in-app navigation. Closing the window with unsaved text is
+  not guarded (Phase 5 adds that handler).
 
 Take note (section 3.8):
 
@@ -421,6 +501,43 @@ two hours, confirm timestamps, silence behaviour and drift, and settle the file 
   mid-recording loses no more than the flush interval; unplugging a device preserves the other
   track; nothing in this phase requires a model or network.
 
+Status: implemented and tested against the synthetic backend; **the spike has not been done
+and nothing has been recorded from a real device.** `docs/recording.md` describes what was
+built and ends with the checklist the spike must cover. What is and is not established:
+
+- Established in WSL: the file formats, bounded buffer, overflow accounting, journal and
+  recovery, clock map and gaps, preflight, coordinated start and stop, per-track results,
+  device loss (D13), the state machine and its startup settling, the commands, events and
+  screens. In a built Linux app with the synthetic backend: a recording from start to
+  finalised files, and a process killed with SIGKILL mid-recording then recovered on restart
+  with under 0.1 s lost.
+- A simulated two-hour recording of both tracks, delivered faster than real time, held the
+  process at 4 to 5 MiB. This shows memory does not grow with length; it is not a two-hour
+  recording.
+- Not established: anything about WASAPI at run time. `src/wasapi.rs` type-checks and passes
+  clippy for the Windows target and has never run. Timestamps, drift, loopback silence, device
+  loss codes, access-denied codes and the 4 GB path all wait for the spike.
+- The file format was not "settled by the spike" as planned; RF64 with a reserved `JUNK` chunk
+  was chosen without it. Whether the webview can play these files directly is unknown and
+  matters only to Phase 5, which plays a derived mix.
+- Which devices are recorded is a setting (D16). The listing and selection code for Windows is
+  part of what has never run: the spike must confirm that device identifiers are stable across
+  unplugging and restarts, and that the communications default is the device meeting apps use.
+- A device unplugged between saving the setting and starting a recording refuses the start. It
+  does not fall back to the default, by design.
+- The device list is read when the settings page opens and on request. It does not update by
+  itself when a device is plugged in.
+- Closing the window is refused while recording (D15).
+- Free disk space is checked before start, not during. A disk that fills mid-recording fails
+  the track with a write error and keeps what was saved; nothing warns in advance.
+- Health events are saved a few times a second. If the database cannot be written at that
+  moment the event summary is lost; the clock map still marks every gap.
+- A recovered meeting's length is the end of its longest track, since the true stop time is
+  unknown.
+- If the app dies in the few milliseconds between starting capture and recording that fact,
+  the meeting returns to `setup` at the next start and the files of that attempt stay in its
+  audio folder, unreferenced, until the meeting is deleted.
+
 Take note (section 3.8):
 
 - WASAPI needs `unsafe`. Override the workspace `unsafe_code` lint in `skribe-audio` only, and
@@ -452,6 +569,14 @@ Take note (section 3.8):
 
 Take note (section 3.8):
 
+- Do the Phase 3 spike first. Phase 4 puts notes and sections on a timeline that has only ever
+  been driven by a synthetic clock.
+- The live session is owned by `RecordingService` in `skribe-ipc`; the note and transition
+  services belong beside it and stamp with `RecordingSession::clock()`.
+- This phase adds `sections`, `timeline_events`, `timeline_overrides`, `notes` and
+  `note_revisions` as migration 4. When recording starts, the agenda is copied into `sections`
+  and the first transition is written at time zero (rule 4), in the transaction that marks the
+  recording started.
 - Register the global shortcut from Rust, never from the frontend, so the window needs no
   shortcut permission and the capability test keeps its meaning. The plugin is wired in
   `src-tauri`; the advance and exhaustion logic stays in the library crates.
@@ -481,6 +606,10 @@ Take note (section 3.8):
   in a library crate so they are tested.
 - The window-close guard for unsaved drafts needs either a Rust-side close handler or a window
   permission. Prefer the Rust-side handler; a window permission changes the capability test.
+  Phase 3 added that handler in `src-tauri/src/lib.rs` for live recordings, with the
+  `close-blocked` event; extend it rather than adding a second one.
+- Playback reads tracks through the clock map (`skribe_audio::clock::ClockMap`), not by sample
+  position alone, and system audio has gaps where nothing was played.
 - Search can use FTS5; the bundled SQLite already includes it.
 
 ### Phase 6: Model and runtime management
@@ -665,7 +794,7 @@ installer is built from the revision that just passed:
 Any failed step stops the job, so packaging cannot run on a failing revision. Build parallelism,
 timeout and disk budget follow `docs/ci.md`. Artifacts are unsigned build outputs, not releases.
 Models and runtimes are never bundled; a CI check fails if the installer exceeds a size budget.
-The workflow exists as `.github/workflows/ci.yml` and has not yet run (Phase 0 status).
+The workflow is `.github/workflows/ci.yml`. It has run once, green (Phase 0 status).
 
 ## 7. Testing
 
@@ -702,7 +831,8 @@ running a built app.
 | Hosted-runner time, memory or disk limits | CI cannot build the installer | Single compile job, bounded parallelism, limits documented in `docs/ci.md`, no models in CI |
 | Global shortcut conflicts with other applications | Section transitions silently fail | Report registration failure; on-screen control as an equal path |
 | WSL cannot exercise audio or the installer | Defects found late | Windows-only checklists per phase; CI on Windows from Phase 0 |
-| The CI workflow and its limits have never run | The first push fails for reasons unrelated to the change being pushed | Get the first green run before starting Phase 2; then record measured figures in `docs/ci.md` |
+| The Windows capture module has never run, and WSL can only type-check it | Recording fails or misbehaves on the first real device, after two more phases have been built on it | Do the Phase 3 spike against the checklist in `docs/recording.md` before starting Phase 4; keep the module thin |
+| Meeting apps play to the default communications device, which can differ from the default playback device | The system track records silence while the meeting is audible | The device is a setting that can follow the communications default (D16), and the devices are shown before start. Both tracks still follow the plain default until the user changes them, so the spike should decide whether system audio ought to follow the communications default out of the box |
 | The Content Security Policy and capability list reject a dependency or origin only at runtime | Can work under `tauri dev` and fail in the installed app | Check every new UI dependency and origin in a built app (section 3.8) |
 | Bundle identifier or library location changed after release | Users appear to lose data | Fix D1 and D7 before the first distributed build; changes only via explicit verified migration |
 

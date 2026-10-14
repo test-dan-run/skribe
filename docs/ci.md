@@ -4,10 +4,12 @@ One GitHub Actions workflow, [`.github/workflows/ci.yml`](../.github/workflows/c
 every push to `main` and every pull request and, if everything passes, builds the Windows x64
 NSIS installer from that same checkout.
 
-**Status: proposed, not yet run.** The workflow and the limits below were written in WSL and
-have not run on a hosted runner. The limits are decision D5 in
-[IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md) and await the owner's review. Replace the
-"expected" figures with measured ones after the first green run.
+**Status: one green run; limits not yet reviewed.** The workflow first ran on 2026-10-13
+against commit `e634751` (the scaffold and library layer) and passed on its first attempt:
+[run 38430911426](https://github.com/test-dan-run/skribe/actions/runs/38430911426). The limits
+below are decision D5 in [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md) and still await
+the owner's review. The work added since that run (meetings, recording, and the Windows audio
+module, which only this job compiles) has not yet been through CI.
 
 ## What the job does
 
@@ -33,6 +35,13 @@ Things worth knowing:
   `npm run ipc:generate` and commit the result to fix that.
 - SQLite is compiled from the C source bundled with `rusqlite`, as part of the same job. CI
   builds no inference runtime and downloads no model.
+- The Windows audio module (`crates/skribe-audio/src/wasapi.rs`) is compiled only on Windows,
+  so this job is its only full build. It can be type-checked in WSL with
+  `cargo check -p skribe-audio --target x86_64-pc-windows-msvc` once that target is installed
+  with `rustup target add`. No CI step can exercise it: hosted runners have no audio devices.
+- The installer build compiles only the app and what it depends on. The synthetic capture
+  backend is a test fixture behind a feature that build does not enable, and a release build
+  that enabled it would fail to compile.
 - Actions are pinned to commit SHAs. The job's token can only read the repository.
 
 ## Resource limits
@@ -41,12 +50,31 @@ Things worth knowing:
 |-------|-------|-----|
 | Runner | `windows-2025`, standard GitHub-hosted | Pinned image label rather than `windows-latest`, so an image change is a reviewed edit |
 | Runner size | 4 vCPU, 16 GB RAM, 14 GB SSD | What GitHub documents for standard Windows runners on public repositories (checked 2026-10-13). A private repository gets 2 vCPU and 8 GB: lower `CARGO_BUILD_JOBS` to 2 if the repository's visibility changes |
-| Job timeout | 60 minutes | Expected run is 20 to 30 minutes with no build cache. A job that reaches the limit is treated as hung |
+| Job timeout | 60 minutes | The first run took 6 minutes 25 seconds with no build cache. A job that reaches the limit is treated as hung |
 | Build parallelism | `CARGO_BUILD_JOBS=4` | One compiler process per vCPU, which leaves about 4 GB of RAM for each. Set explicitly so a different runner does not change it silently |
 | Build disk | `target/` at most 10 GiB | Leaves room on the 14 GB disk. Checked in step 7 and recorded in the build manifest |
 | Installer size | at most 30 MiB | Models and runtimes are never bundled. Checked in step 7 |
 | Build cache | none | Every run compiles from the lockfiles. Slower, but nothing from an earlier run can reach the installer. Revisit with measured timings |
 | Artifact retention | 30 days | CI artifacts are for review, not distribution |
+
+### Measured on the first run
+
+Run 38430911426, `windows-2025`, 2026-10-13, no build cache:
+
+| Step | Time |
+|------|------|
+| Whole job | 6 min 25 s |
+| Clippy (compiles every crate once, debug) | 1 min 46 s |
+| Rust tests | 16 s |
+| Build NSIS installer (the release compile) | 3 min 18 s |
+| Everything else | under 1 min |
+
+The uploaded artifact was 2.8 MB compressed, against the 30 MiB installer budget. The measured
+`target/` size and the installer's exact size are in that run's `build-manifest.json`; they
+were not read back into this document.
+
+These figures predate the audio crate, the Windows API bindings it uses and the property-test
+dependency, all of which add compile time. Re-measure after the next run.
 
 ## Artifact
 

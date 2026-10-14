@@ -26,6 +26,11 @@ impl Sandbox {
         Library::open_with(&self.roots, APP_VERSION, migrations)
     }
 
+    /// Opens the library with the shipped migrations, creating it if it is new.
+    pub(crate) fn open_latest(&self) -> Library {
+        self.open(MIGRATIONS).expect("open library")
+    }
+
     /// Creates the library at schema 1 and closes it again.
     pub(crate) fn create_v1(&self) {
         drop(self.open(&[v1()]).expect("create library"));

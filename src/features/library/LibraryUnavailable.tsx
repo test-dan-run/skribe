@@ -1,8 +1,10 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId } from "react";
 
 import type { CommandError, SnapshotSummary } from "../../ipc";
-import { ErrorDetails } from "./ErrorDetails";
-import { formatBytes, formatTimestamp } from "./format";
+import { Button } from "../../ui/Button";
+import { ConfirmPanel, ConfirmTrigger, useConfirmation } from "../../ui/Confirmation";
+import { ErrorDetails, ErrorNotice } from "../../ui/ErrorNotice";
+import { formatBytes, formatTimestamp } from "../../ui/format";
 import type { PendingRecovery } from "./useLibrary";
 
 interface LibraryUnavailableProps {
@@ -44,34 +46,16 @@ export function LibraryUnavailable({
         <dd>{error.recovery}</dd>
       </dl>
 
-      {recoveryError !== null && (
-        <div className="notice notice--error" role="alert">
-          <p>
-            <strong>{recoveryError.message}</strong>
-          </p>
-          <p>{recoveryError.retained}</p>
-          <p>{recoveryError.recovery}</p>
-          <ErrorDetails error={recoveryError} />
-        </div>
-      )}
+      {recoveryError !== null && <ErrorNotice error={recoveryError} />}
 
       <p className="progress" role="status">
         {pending === null ? "" : progressText[pending]}
       </p>
 
       {canRetry && (
-        <button
-          type="button"
-          className="button"
-          aria-disabled={busy}
-          onClick={() => {
-            if (!busy) {
-              onRetry();
-            }
-          }}
-        >
+        <Button unavailable={busy} onClick={onRetry}>
           Try again
-        </button>
+        </Button>
       )}
 
       {canRestore && <SnapshotRestore snapshots={snapshots} busy={busy} onRestore={onRestore} />}
@@ -89,7 +73,6 @@ interface SnapshotRestoreProps {
 
 function SnapshotRestore({ snapshots, busy, onRestore }: SnapshotRestoreProps) {
   const headingId = useId();
-  const [confirming, setConfirming] = useState<string | null>(null);
 
   return (
     <section className="snapshots" aria-labelledby={headingId}>
@@ -104,21 +87,13 @@ function SnapshotRestore({ snapshots, busy, onRestore }: SnapshotRestoreProps) {
           restore from.
         </p>
       ) : (
-        <ul className="snapshot-list">
+        <ul className="plain-list">
           {snapshots.map((snapshot) => (
             <SnapshotRow
               key={snapshot.name}
               snapshot={snapshot}
               busy={busy}
-              confirming={confirming === snapshot.name}
-              onAsk={() => {
-                setConfirming(snapshot.name);
-              }}
-              onCancel={() => {
-                setConfirming(null);
-              }}
-              onConfirm={() => {
-                setConfirming(null);
+              onRestore={() => {
                 onRestore(snapshot.name);
               }}
             />
@@ -132,92 +107,42 @@ function SnapshotRestore({ snapshots, busy, onRestore }: SnapshotRestoreProps) {
 interface SnapshotRowProps {
   snapshot: SnapshotSummary;
   busy: boolean;
-  confirming: boolean;
-  onAsk: () => void;
-  onCancel: () => void;
-  onConfirm: () => void;
+  onRestore: () => void;
 }
 
-function SnapshotRow({ snapshot, busy, confirming, onAsk, onCancel, onConfirm }: SnapshotRowProps) {
-  const confirmId = useId();
-  const questionId = useId();
-  const askButton = useRef<HTMLButtonElement>(null);
-  const cancelButton = useRef<HTMLButtonElement>(null);
+function SnapshotRow({ snapshot, busy, onRestore }: SnapshotRowProps) {
+  const confirmation = useConfirmation();
   const taken = formatTimestamp(snapshot.createdAtUnixMs);
 
-  // Opening the confirmation moves focus to the safe choice.
-  useEffect(() => {
-    if (confirming) {
-      cancelButton.current?.focus();
-    }
-  }, [confirming]);
-
-  const close = (then: () => void) => {
-    then();
-    askButton.current?.focus();
-  };
-
   return (
-    <li className="snapshot">
-      <div className="snapshot__summary">
+    <li className="row">
+      <div className="row__summary">
         <div>
-          <p className="snapshot__title">Snapshot from {taken}</p>
-          <p className="snapshot__meta">
+          <p className="row__title">Snapshot from {taken}</p>
+          <p className="row__meta">
             Database schema {snapshot.schemaVersion} · {formatBytes(snapshot.sizeBytes)} ·{" "}
             <code>{snapshot.name}</code>
           </p>
         </div>
-        <button
-          ref={askButton}
-          type="button"
-          className="button"
-          aria-label={`Restore the snapshot from ${taken}`}
-          aria-expanded={confirming}
-          aria-controls={confirmId}
-          aria-disabled={busy}
-          onClick={() => {
-            if (!busy && !confirming) {
-              onAsk();
-            }
-          }}
+        <ConfirmTrigger
+          confirmation={confirmation}
+          label={`Restore the snapshot from ${taken}`}
+          unavailable={busy}
         >
           Restore…
-        </button>
+        </ConfirmTrigger>
       </div>
-      <div id={confirmId}>
-        {confirming && (
-          <div className="confirm" role="group" aria-labelledby={questionId}>
-            <p id={questionId}>
-              <strong>Replace the library&rsquo;s database with this snapshot?</strong>
-            </p>
-            <p>
-              The current database file is moved aside and kept, not deleted. Anything saved
-              after {taken} is not in this snapshot. Audio files are not changed.
-            </p>
-            <div className="confirm__actions">
-              <button
-                ref={cancelButton}
-                type="button"
-                className="button"
-                onClick={() => {
-                  close(onCancel);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="button button--primary"
-                onClick={() => {
-                  close(onConfirm);
-                }}
-              >
-                Restore this snapshot
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <ConfirmPanel
+        confirmation={confirmation}
+        question="Replace the library’s database with this snapshot?"
+        confirmLabel="Restore this snapshot"
+        onConfirm={onRestore}
+      >
+        <p>
+          The current database file is moved aside and kept, not deleted. Anything saved after{" "}
+          {taken} is not in this snapshot. Audio files are not changed.
+        </p>
+      </ConfirmPanel>
     </li>
   );
 }

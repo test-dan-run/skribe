@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 
-use crate::testutil::{APP_VERSION, GARBAGE, Sandbox, read, v1};
+use crate::testutil::{APP_VERSION, GARBAGE, Sandbox, read};
 use crate::{LibraryAvailability, LibraryService, StoreError};
 
 fn service(sandbox: &Sandbox) -> LibraryService {
@@ -47,7 +47,7 @@ fn concurrent_callers_share_one_open_library() {
 #[test]
 fn retry_opens_the_library_once_the_other_process_has_let_go() {
     let sandbox = Sandbox::new();
-    let other_process = sandbox.open(&[v1()]).expect("open");
+    let other_process = sandbox.open_latest();
     let service = service(&sandbox);
 
     let error = expect_unavailable(service.availability());
@@ -78,7 +78,7 @@ fn restore_is_refused_unless_a_snapshot_can_fix_the_failure() {
     );
     drop(ready);
 
-    let other_process = sandbox.open(&[v1()]).expect("open");
+    let other_process = sandbox.open_latest();
     let locked = service(&sandbox);
     expect_unavailable(locked.availability());
     let result = locked.restore_snapshot(&snapshot.name);

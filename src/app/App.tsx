@@ -1,7 +1,6 @@
 import { LibraryGate } from "../features/library/LibraryGate";
-import { LibraryNotices, StorageDetails } from "../features/library/LibrarySummary";
-import { MeetingsHome } from "../features/meetings/MeetingsHome";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { Workspace } from "./Workspace";
 
 export function App() {
   return (
@@ -11,15 +10,7 @@ export function App() {
       </header>
       <main className="app__main">
         <ErrorBoundary>
-          <LibraryGate>
-            {(library) => (
-              <>
-                <LibraryNotices library={library} />
-                <MeetingsHome />
-                <StorageDetails library={library} />
-              </>
-            )}
-          </LibraryGate>
+          <LibraryGate>{(library) => <Workspace library={library} />}</LibraryGate>
         </ErrorBoundary>
       </main>
     </div>

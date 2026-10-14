@@ -7,7 +7,9 @@ use crate::migrate::{
     self, MIGRATIONS, Migration, MigrationContext, MigrationMarker, MigrationReport,
 };
 use crate::worker::Database;
-use crate::{LibraryManifest, SnapshotInfo, StorageRoots, StoreError, db, fsutil, snapshot};
+use crate::{
+    LibraryManifest, SnapshotInfo, StorageRoots, StoreError, db, fsutil, recording, snapshot,
+};
 
 /// How an interrupted migration found at startup was resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +32,9 @@ pub struct OpenReport {
     pub created: bool,
     pub recovery: Option<InterruptedMigrationRecovery>,
     pub migration: Option<MigrationReport>,
+    /// Recordings that were under way when the library was last closed. Each is now
+    /// `interrupted` and can be recovered from what reached the disk.
+    pub interrupted_recordings: u32,
 }
 
 /// The result of replacing the database with a snapshot.
@@ -121,8 +126,10 @@ impl Library {
             library_id: &manifest.library_id,
             app_version,
         };
-        let (conn, migration) = migrate::migrate(conn, &ctx, from)?;
+        let (mut conn, migration) = migrate::migrate(conn, &ctx, from)?;
         report.migration = migration;
+        // The lock above means no other process is recording into this library.
+        report.interrupted_recordings = recording::settle_orphaned_recordings(&mut conn)?;
 
         Ok(Self {
             roots: roots.clone(),
@@ -192,7 +199,6 @@ impl Library {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn database(&self) -> &Database {
         &self.db
     }

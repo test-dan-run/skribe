@@ -1,4 +1,5 @@
 use serde::Serialize;
+use skribe_audio::{AudioError, CaptureError, CaptureErrorKind, Source};
 use skribe_store::{FailedMigrationOutcome, StoreError};
 
 /// Stable identifier for a failure. The frontend may branch on it; the wording may change.
@@ -23,6 +24,27 @@ pub enum ErrorCode {
     SnapshotNotFound,
     SnapshotUnusable,
     RestoreNotAvailable,
+    MeetingNotFound,
+    AgendaItemNotFound,
+    RevisionConflict,
+    PreparationClosed,
+    MeetingInTrash,
+    MeetingNotInTrash,
+    MeetingBusy,
+    AgendaFull,
+    MeetingFilesNotRemoved,
+    CaptureUnavailable,
+    CaptureDeviceMissing,
+    CaptureAccessDenied,
+    CaptureFormatUnsupported,
+    CaptureDeviceError,
+    DiskSpaceLow,
+    RecordingStorage,
+    RecordingInProgress,
+    RecordingNotActive,
+    RecordingStateConflict,
+    RecordingNotRegistered,
+    TrackUnrecoverable,
     Internal,
 }
 
@@ -35,6 +57,8 @@ pub enum RecoveryAction {
     RetryOpen,
     /// Replace the database with a snapshot the user picks.
     RestoreSnapshot,
+    /// Load the saved version again, replacing what is on screen.
+    Reload,
 }
 
 /// What every failed command returns: what happened, what was kept and what can be done.
@@ -55,10 +79,10 @@ pub struct CommandError {
     pub detail: Option<String>,
 }
 
-const NOTHING_CHANGED: &str = "Nothing was changed.";
+pub(crate) const NOTHING_CHANGED: &str = "Nothing was changed.";
 
 impl CommandError {
-    fn new(code: ErrorCode, message: &str, retained: &str, recovery: &str) -> Self {
+    pub(crate) fn new(code: ErrorCode, message: &str, retained: &str, recovery: &str) -> Self {
         Self {
             code,
             message: message.to_owned(),
@@ -69,12 +93,12 @@ impl CommandError {
         }
     }
 
-    fn with_actions(mut self, actions: &[RecoveryAction]) -> Self {
+    pub(crate) fn with_actions(mut self, actions: &[RecoveryAction]) -> Self {
         self.actions = actions.to_vec();
         self
     }
 
-    fn with_detail(mut self, detail: impl ToString) -> Self {
+    pub(crate) fn with_detail(mut self, detail: impl ToString) -> Self {
         self.detail = Some(detail.to_string());
         self
     }
@@ -114,7 +138,7 @@ impl CommandError {
 
 impl From<&StoreError> for CommandError {
     fn from(error: &StoreError) -> Self {
-        use RecoveryAction::{RestoreSnapshot, RetryOpen};
+        use RecoveryAction::{Reload, RestoreSnapshot, RetryOpen};
 
         let described = match error {
             StoreError::InvalidRoots { .. } => Self::new(
@@ -258,6 +282,239 @@ impl From<&StoreError> for CommandError {
                 "Data already saved in your library was not changed.",
                 "Restart Skribe.",
             ),
+            StoreError::DataInvalid { .. } => Self::new(
+                ErrorCode::DatabaseError,
+                "The library holds a value this version of Skribe does not understand.",
+                NOTHING_CHANGED,
+                "Restart Skribe. If this keeps happening, the library may have been changed by \
+                 another program.",
+            ),
+            StoreError::MeetingNotFound { .. } => Self::new(
+                ErrorCode::MeetingNotFound,
+                "That meeting is no longer in your library.",
+                NOTHING_CHANGED,
+                "Go back to the list of meetings.",
+            ),
+            StoreError::AgendaItemNotFound { .. } => Self::new(
+                ErrorCode::AgendaItemNotFound,
+                "That agenda item is no longer in the meeting.",
+                "Nothing was changed. The rest of the agenda is as it was saved.",
+                "Reload the meeting to see its current agenda.",
+            )
+            .with_actions(&[Reload]),
+            StoreError::RevisionConflict { .. } => Self::new(
+                ErrorCode::RevisionConflict,
+                "This was changed after it was loaded here, so your change was not saved.",
+                "The saved version was kept. Your change was not applied to it.",
+                "Reload to see the saved version, then make your change again.",
+            )
+            .with_actions(&[Reload]),
+            StoreError::PreparationClosed { .. } => Self::new(
+                ErrorCode::PreparationClosed,
+                "The agenda can no longer be changed because recording has started for this \
+                 meeting.",
+                "The agenda was kept as it was when recording started.",
+                "The meeting's title and planned time can still be changed.",
+            )
+            .with_actions(&[Reload]),
+            StoreError::MeetingInTrash => Self::new(
+                ErrorCode::MeetingInTrash,
+                "This meeting is in the trash.",
+                NOTHING_CHANGED,
+                "Restore the meeting from the trash to change it.",
+            ),
+            StoreError::MeetingNotInTrash => Self::new(
+                ErrorCode::MeetingNotInTrash,
+                "This meeting is not in the trash.",
+                NOTHING_CHANGED,
+                "Only a meeting in the trash can be restored or permanently deleted.",
+            ),
+            StoreError::MeetingBusy { .. } => Self::new(
+                ErrorCode::MeetingBusy,
+                "This meeting is being recorded.",
+                NOTHING_CHANGED,
+                "Stop the recording first.",
+            ),
+            StoreError::AgendaFull { limit } => Self::new(
+                ErrorCode::AgendaFull,
+                &format!("The agenda already has the most items a meeting can hold ({limit})."),
+                NOTHING_CHANGED,
+                "Remove an item or combine items, then try again.",
+            ),
+            StoreError::AgendaOrderInvalid => Self::new(
+                ErrorCode::InvalidInput,
+                "That order does not match the meeting's agenda.",
+                NOTHING_CHANGED,
+                "Reload the meeting and try again.",
+            )
+            .with_actions(&[Reload]),
+            StoreError::RecordingStateConflict { .. } => Self::new(
+                ErrorCode::RecordingStateConflict,
+                "This meeting's recording has moved on, so that step is not available.",
+                NOTHING_CHANGED,
+                "Reload the meeting to see where its recording is now.",
+            )
+            .with_actions(&[Reload]),
+            StoreError::MeetingFilesNotRemoved { .. } => Self::new(
+                ErrorCode::MeetingFilesNotRemoved,
+                "Skribe could not delete all of this meeting's files.",
+                "The meeting is still in the trash. Some of its audio files may already have \
+                 been deleted.",
+                "Close any program that has the meeting's files open, then delete it again.",
+            ),
+        };
+        described.with_detail(error)
+    }
+}
+
+const NOTHING_RECORDED: &str = "Nothing was recorded and the meeting was not changed.";
+
+/// How a source's device is named in a sentence.
+fn device_phrase(source: Source) -> &'static str {
+    match source {
+        Source::Microphone => "microphone",
+        Source::System => "playback device that system audio is recorded from",
+    }
+}
+
+fn gigabytes(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1_000_000_000.0)
+}
+
+impl CommandError {
+    /// A recording is already starting, running or being saved.
+    pub fn recording_in_progress() -> Self {
+        Self::new(
+            ErrorCode::RecordingInProgress,
+            "Another recording is already in progress.",
+            "The recording in progress was not affected.",
+            "Stop that recording before starting or checking another.",
+        )
+    }
+
+    /// A stop was asked for a meeting that no capture session owns.
+    pub fn recording_not_active() -> Self {
+        Self::new(
+            ErrorCode::RecordingNotActive,
+            "This meeting is not being recorded.",
+            NOTHING_CHANGED,
+            "Reload the meeting to see where its recording is now.",
+        )
+        .with_actions(&[RecoveryAction::Reload])
+    }
+
+    /// Capture stopped and the files were completed, but the library could not be updated.
+    pub fn recording_not_registered(detail: impl ToString) -> Self {
+        Self::new(
+            ErrorCode::RecordingNotRegistered,
+            "The recording was stopped, but Skribe could not update the library.",
+            "Both tracks were stopped and what they captured is kept in the library folder.",
+            "Restart Skribe. The meeting will be marked as interrupted and can then be \
+             recovered without losing audio.",
+        )
+        .with_detail(detail)
+    }
+}
+
+impl From<&CaptureError> for CommandError {
+    fn from(error: &CaptureError) -> Self {
+        let device = device_phrase(error.source_name);
+        let described = match error.kind {
+            CaptureErrorKind::Unavailable => Self::new(
+                ErrorCode::CaptureUnavailable,
+                "This build of Skribe cannot record audio.",
+                NOTHING_RECORDED,
+                "Recording needs Skribe for Windows. Meetings and agendas can still be \
+                 prepared here.",
+            ),
+            CaptureErrorKind::NoDevice => Self::new(
+                ErrorCode::CaptureDeviceMissing,
+                &format!("Windows has no default {device}."),
+                NOTHING_RECORDED,
+                "Connect or enable a device and make it the default in Windows sound settings, \
+                 or choose a specific device in Skribe's settings. Then try again.",
+            ),
+            CaptureErrorKind::ChosenDeviceMissing => Self::new(
+                ErrorCode::CaptureDeviceMissing,
+                match error.source_name {
+                    Source::Microphone => {
+                        "The microphone chosen in Settings is not connected or is disabled."
+                    }
+                    Source::System => {
+                        "The playback device chosen in Settings for system audio is not \
+                         connected or is disabled."
+                    }
+                },
+                "Nothing was recorded and the meeting was not changed. Skribe did not switch \
+                 to another device.",
+                "Connect the device again, or choose another one in Settings, then try again.",
+            ),
+            CaptureErrorKind::AccessDenied => Self::new(
+                ErrorCode::CaptureAccessDenied,
+                &format!("Windows did not allow Skribe to use the {device}."),
+                NOTHING_RECORDED,
+                "In Windows Settings, open Privacy & security, then Microphone, and allow \
+                 desktop apps to use the microphone. Then try again.",
+            ),
+            CaptureErrorKind::FormatUnsupported => Self::new(
+                ErrorCode::CaptureFormatUnsupported,
+                &format!("The {device} uses an audio format Skribe cannot record."),
+                NOTHING_RECORDED,
+                "In Windows sound settings, choose a 16, 24 or 32-bit format for the device, \
+                 then try again.",
+            ),
+            CaptureErrorKind::Device => Self::new(
+                ErrorCode::CaptureDeviceError,
+                &format!("The {device} could not be used."),
+                NOTHING_RECORDED,
+                "Check that the device works in Windows sound settings and that no other app \
+                 has taken exclusive control of it, then try again.",
+            ),
+        };
+        described.with_detail(error)
+    }
+}
+
+impl From<&AudioError> for CommandError {
+    fn from(error: &AudioError) -> Self {
+        let described = match error {
+            AudioError::Capture(capture) => return Self::from(capture),
+            AudioError::Io { .. } => Self::new(
+                ErrorCode::RecordingStorage,
+                "Skribe could not write the recording's files.",
+                "Audio that had already been saved was kept.",
+                "Check that the disk has free space and that the library folder can be \
+                 written, then try again.",
+            ),
+            AudioError::DiskSpaceLow {
+                available_bytes,
+                required_bytes,
+                ..
+            } => Self::new(
+                ErrorCode::DiskSpaceLow,
+                &format!(
+                    "There is not enough free disk space to start recording: {} free, and an \
+                     hour of recording needs {}.",
+                    gigabytes(*available_bytes),
+                    gigabytes(*required_bytes)
+                ),
+                NOTHING_RECORDED,
+                "Free up space on the disk that holds your library, then try again.",
+            ),
+            AudioError::JournalInvalid { .. }
+            | AudioError::ClockInvalid { .. }
+            | AudioError::WavInvalid { .. } => Self::new(
+                ErrorCode::TrackUnrecoverable,
+                "A track's files are damaged and could not be read.",
+                "The files were left exactly as they are.",
+                "The other track, if it is intact, is still kept with the meeting.",
+            ),
+            AudioError::WriterStopped(_) => Self::new(
+                ErrorCode::Internal,
+                "Skribe ran into an internal problem while writing a track.",
+                "Audio that had already been saved was kept.",
+                "Restart Skribe.",
+            ),
         };
         described.with_detail(error)
     }
@@ -336,7 +593,7 @@ mod tests {
                 database: "other".into(),
             },
             StoreError::WalUnavailable {
-                path,
+                path: path.clone(),
                 mode: "delete".into(),
             },
             StoreError::MigrationFailed {
@@ -364,6 +621,34 @@ mod tests {
                 detail: "busy".into(),
             },
             StoreError::WorkerStopped,
+            StoreError::DataInvalid {
+                place: "meetings",
+                detail: "state".into(),
+            },
+            StoreError::MeetingNotFound { id: "m".into() },
+            StoreError::AgendaItemNotFound { id: "a".into() },
+            StoreError::RevisionConflict {
+                expected: 1,
+                found: 2,
+            },
+            StoreError::PreparationClosed {
+                state: skribe_domain::RecordingState::Recording,
+            },
+            StoreError::MeetingInTrash,
+            StoreError::MeetingNotInTrash,
+            StoreError::MeetingBusy {
+                state: skribe_domain::RecordingState::Recording,
+            },
+            StoreError::AgendaFull { limit: 100 },
+            StoreError::AgendaOrderInvalid,
+            StoreError::MeetingFilesNotRemoved {
+                path: PathBuf::from("/library/audio/m"),
+                source: std::io::Error::other("in use"),
+            },
+            StoreError::RecordingStateConflict {
+                from: skribe_domain::RecordingState::Recorded,
+                to: skribe_domain::RecordingState::Ready,
+            },
         ]
     }
 
@@ -412,6 +697,129 @@ mod tests {
             snapshot: Some("skribe-v1-1.sqlite".into()),
         });
         assert!(restored.retained.contains("set-aside-1"));
+    }
+
+    #[test]
+    fn a_stale_change_says_the_saved_version_was_kept_and_offers_a_reload() {
+        let conflict = CommandError::from(&StoreError::RevisionConflict {
+            expected: 1,
+            found: 2,
+        });
+        assert_eq!(conflict.code, ErrorCode::RevisionConflict);
+        assert!(conflict.retained.contains("saved version was kept"));
+        assert_eq!(conflict.actions, vec![RecoveryAction::Reload]);
+    }
+
+    fn every_audio_error() -> Vec<AudioError> {
+        let path = PathBuf::from("/library/audio/m/t.wav");
+        let mut errors: Vec<AudioError> = [
+            CaptureErrorKind::Unavailable,
+            CaptureErrorKind::NoDevice,
+            CaptureErrorKind::ChosenDeviceMissing,
+            CaptureErrorKind::AccessDenied,
+            CaptureErrorKind::FormatUnsupported,
+            CaptureErrorKind::Device,
+        ]
+        .into_iter()
+        .flat_map(|kind| {
+            Source::BOTH.map(|source| {
+                AudioError::Capture(CaptureError::new(source, kind.clone(), "0x88890004"))
+            })
+        })
+        .collect();
+        errors.extend([
+            AudioError::Io {
+                action: "write",
+                path: path.clone(),
+                source: std::io::Error::other("disk full"),
+            },
+            AudioError::JournalInvalid {
+                path: path.clone(),
+                reason: "short".into(),
+            },
+            AudioError::ClockInvalid {
+                path: path.clone(),
+                reason: "short".into(),
+            },
+            AudioError::WavInvalid {
+                path: path.clone(),
+                reason: "short".into(),
+            },
+            AudioError::DiskSpaceLow {
+                path,
+                available_bytes: 1_500_000_000,
+                required_bytes: 2_792_448_000,
+            },
+            AudioError::WriterStopped(Source::System),
+        ]);
+        errors
+    }
+
+    #[test]
+    fn every_recording_failure_says_what_happened_what_was_kept_and_what_to_do() {
+        for error in every_audio_error() {
+            let described = CommandError::from(&error);
+            assert!(!described.message.is_empty(), "{error:?}");
+            assert!(!described.retained.is_empty(), "{error:?}");
+            assert!(!described.recovery.is_empty(), "{error:?}");
+            assert!(described.detail.is_some(), "{error:?}");
+        }
+        for error in [
+            CommandError::recording_in_progress(),
+            CommandError::recording_not_active(),
+            CommandError::recording_not_registered("busy"),
+        ] {
+            assert!(!error.retained.is_empty() && !error.recovery.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_refused_start_names_the_device_and_the_reason() {
+        let missing = CommandError::from(&CaptureError::new(
+            Source::System,
+            CaptureErrorKind::NoDevice,
+            "0x80070490",
+        ));
+        assert_eq!(missing.code, ErrorCode::CaptureDeviceMissing);
+        assert!(missing.message.contains("playback device"));
+        assert!(missing.retained.contains("Nothing was recorded"));
+
+        let denied = CommandError::from(&CaptureError::new(
+            Source::Microphone,
+            CaptureErrorKind::AccessDenied,
+            "0x80070005",
+        ));
+        assert_eq!(denied.code, ErrorCode::CaptureAccessDenied);
+        assert!(denied.message.contains("microphone"));
+
+        let space = CommandError::from(&AudioError::DiskSpaceLow {
+            path: PathBuf::from("/library/audio"),
+            available_bytes: 1_500_000_000,
+            required_bytes: 2_792_448_000,
+        });
+        assert_eq!(space.code, ErrorCode::DiskSpaceLow);
+        assert!(space.message.contains("1.5 GB free"), "{}", space.message);
+        assert!(space.message.contains("needs 2.8 GB"), "{}", space.message);
+
+        let unplugged = CommandError::from(&CaptureError::new(
+            Source::System,
+            CaptureErrorKind::ChosenDeviceMissing,
+            "the chosen device is not among the active devices",
+        ));
+        assert_eq!(unplugged.code, ErrorCode::CaptureDeviceMissing);
+        assert!(unplugged.message.contains("chosen in Settings"));
+        assert!(
+            unplugged
+                .retained
+                .contains("did not switch to another device")
+        );
+
+        let unavailable = CommandError::from(&CaptureError::new(
+            Source::Microphone,
+            CaptureErrorKind::Unavailable,
+            "no backend",
+        ));
+        assert_eq!(unavailable.code, ErrorCode::CaptureUnavailable);
     }
 
     #[test]

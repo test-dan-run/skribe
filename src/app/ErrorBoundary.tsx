@@ -1,6 +1,8 @@
 import { Component } from "react";
 import type { ReactNode } from "react";
 
+import { Button } from "../ui/Button";
+
 interface ErrorBoundaryProps {
   children: ReactNode;
 }
@@ -28,15 +30,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           This is a problem with what is shown on screen. Data already saved stays in your
           library.
         </p>
-        <button
-          type="button"
-          className="button"
+        <Button
           onClick={() => {
             window.location.reload();
           }}
         >
           Reload the window
-        </button>
+        </Button>
       </div>
     );
   }

@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use skribe_domain::MeetingId;
+
 use crate::StoreError;
 use crate::fsutil;
 
@@ -152,6 +154,16 @@ impl StorageRoots {
 
     pub(crate) fn derived_dir(&self) -> PathBuf {
         self.library.join("derived")
+    }
+
+    /// Where a meeting's original tracks are kept. Created when its recording starts.
+    pub fn meeting_audio_dir(&self, meeting: &MeetingId) -> PathBuf {
+        self.audio_dir().join(meeting.to_string())
+    }
+
+    /// Where a meeting's derived files are kept: prepared audio, mixes and checkpoints.
+    pub fn meeting_derived_dir(&self, meeting: &MeetingId) -> PathBuf {
+        self.derived_dir().join(meeting.to_string())
     }
 
     pub(crate) fn trash_dir(&self) -> PathBuf {

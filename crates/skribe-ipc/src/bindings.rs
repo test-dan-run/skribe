@@ -8,6 +8,15 @@ use std::path::{Path, PathBuf};
 use ts_rs::{Config, TS};
 
 use crate::library::{LibraryStatus, RestoreSnapshotArgs};
+use crate::meetings::{
+    AgendaAddArgs, AgendaEditArgs, AgendaRemoveArgs, AgendaReorderArgs, MeetingCreateArgs,
+    MeetingDetail, MeetingIdArgs, MeetingList, MeetingUpdateArgs,
+};
+use crate::recording::{
+    CLOSE_BLOCKED_EVENT, CloseBlocked, PreflightReport, RECORDING_STATUS_EVENT, RecordingDevices,
+    RecordingStatus, SetRecordingDevicesArgs,
+};
+use crate::settings::{SetSectionShortcutArgs, Settings};
 use crate::{COMMAND_NAMES, CommandError};
 
 const UPDATE_VARIABLE: &str = "SKRIBE_UPDATE_IPC";
@@ -20,39 +29,97 @@ struct CommandSpec {
     result: String,
 }
 
+/// Collects the command contract. With `export` set, every type it mentions is also written
+/// to the configured folder as TypeScript.
+struct Contract<'a> {
+    cfg: &'a Config,
+    export: bool,
+    commands: Vec<CommandSpec>,
+    /// Event name to the TypeScript type of its payload.
+    events: Vec<(&'static str, String)>,
+}
+
+impl Contract<'_> {
+    fn type_name<T: TS + 'static>(&self) -> String {
+        if self.export {
+            T::export_all(self.cfg).expect("export type");
+        }
+        T::name(self.cfg)
+    }
+
+    /// A command that takes no arguments.
+    fn command<R: TS + 'static>(&mut self, name: &'static str) {
+        let result = self.type_name::<R>();
+        self.commands.push(CommandSpec {
+            name,
+            args: None,
+            result,
+        });
+    }
+
+    /// A command that takes the single parameter `args`.
+    fn command_with<A: TS + 'static, R: TS + 'static>(&mut self, name: &'static str) {
+        let args = Some(self.type_name::<A>());
+        let result = self.type_name::<R>();
+        self.commands.push(CommandSpec { name, args, result });
+    }
+
+    /// An event Rust pushes to the window.
+    fn event<P: TS + 'static>(&mut self, name: &'static str) {
+        let payload = self.type_name::<P>();
+        self.events.push((name, payload));
+    }
+}
+
 fn config(out_dir: &Path) -> Config {
     // Timestamps and sizes stay far below 2^53, so they are plain numbers in TypeScript.
     Config::new().with_out_dir(out_dir).with_large_int("number")
 }
 
-fn command_specs(cfg: &Config) -> Vec<CommandSpec> {
-    let status = LibraryStatus::name(cfg);
-    vec![
-        CommandSpec {
-            name: "library_status",
-            args: None,
-            result: status.clone(),
-        },
-        CommandSpec {
-            name: "library_retry_open",
-            args: None,
-            result: status.clone(),
-        },
-        CommandSpec {
-            name: "library_restore_snapshot",
-            args: Some(RestoreSnapshotArgs::name(cfg)),
-            result: status,
-        },
-    ]
+/// Every command with its argument and result types, in the order of [`COMMAND_NAMES`].
+fn contract(cfg: &Config, export: bool) -> Contract<'_> {
+    let mut contract = Contract {
+        cfg,
+        export,
+        commands: Vec::new(),
+        events: Vec::new(),
+    };
+    if export {
+        CommandError::export_all(cfg).expect("export CommandError");
+    }
+    contract.command::<LibraryStatus>("library_status");
+    contract.command::<LibraryStatus>("library_retry_open");
+    contract.command_with::<RestoreSnapshotArgs, LibraryStatus>("library_restore_snapshot");
+    contract.command::<MeetingList>("meetings_list");
+    contract.command_with::<MeetingCreateArgs, MeetingDetail>("meeting_create");
+    contract.command_with::<MeetingIdArgs, MeetingDetail>("meeting_get");
+    contract.command_with::<MeetingUpdateArgs, MeetingDetail>("meeting_update");
+    contract.command_with::<AgendaAddArgs, MeetingDetail>("agenda_add");
+    contract.command_with::<AgendaEditArgs, MeetingDetail>("agenda_edit");
+    contract.command_with::<AgendaRemoveArgs, MeetingDetail>("agenda_remove");
+    contract.command_with::<AgendaReorderArgs, MeetingDetail>("agenda_reorder");
+    contract.command_with::<MeetingIdArgs, MeetingList>("meeting_trash");
+    contract.command_with::<MeetingIdArgs, MeetingList>("meeting_restore");
+    contract.command_with::<MeetingIdArgs, MeetingList>("meeting_delete_permanently");
+    contract.command::<Settings>("settings_get");
+    contract.command_with::<SetSectionShortcutArgs, Settings>("settings_set_section_shortcut");
+    contract.command_with::<MeetingIdArgs, PreflightReport>("recording_preflight");
+    contract.command_with::<MeetingIdArgs, RecordingStatus>("recording_start");
+    contract.command::<RecordingStatus>("recording_status");
+    contract.command_with::<MeetingIdArgs, MeetingDetail>("recording_stop");
+    contract.command_with::<MeetingIdArgs, MeetingDetail>("recording_recover");
+    contract.command::<RecordingDevices>("recording_devices");
+    contract.command_with::<SetRecordingDevicesArgs, RecordingDevices>("recording_set_devices");
+    contract.event::<RecordingStatus>(RECORDING_STATUS_EVENT);
+    contract.event::<CloseBlocked>(CLOSE_BLOCKED_EVENT);
+    contract
 }
 
 /// File name to contents for everything in `src/ipc/generated`.
 fn generate() -> BTreeMap<String, String> {
     let scratch = tempfile::tempdir().expect("temporary folder");
     let cfg = config(scratch.path());
-    LibraryStatus::export_all(&cfg).expect("export LibraryStatus");
-    RestoreSnapshotArgs::export_all(&cfg).expect("export RestoreSnapshotArgs");
-    CommandError::export_all(&cfg).expect("export CommandError");
+    let contract = contract(&cfg, true);
 
     let mut files = read_typescript(scratch.path());
     let type_names: Vec<String> = files
@@ -60,10 +127,9 @@ fn generate() -> BTreeMap<String, String> {
         .map(|file| file.trim_end_matches(".ts").to_owned())
         .collect();
 
-    let specs = command_specs(&cfg);
     let mut imports = BTreeSet::new();
     let mut entries = String::new();
-    for spec in &specs {
+    for spec in &contract.commands {
         imports.insert(spec.result.clone());
         imports.extend(spec.args.clone());
         let args = spec.args.as_deref().unwrap_or("null");
@@ -85,11 +151,31 @@ fn generate() -> BTreeMap<String, String> {
     commands.push_str(&format!("export type Commands = {{\n{entries}}};\n"));
     files.insert("commands.ts".to_owned(), commands);
 
+    let mut event_imports = BTreeSet::new();
+    let mut event_entries = String::new();
+    for (name, payload) in &contract.events {
+        event_imports.insert(payload.clone());
+        event_entries.push_str(&format!("  \"{name}\": {payload};\n"));
+    }
+    let mut events = String::from(HEADER);
+    for import in &event_imports {
+        events.push_str(&format!(
+            "import type {{ {import} }} from \"./{import}\";\n"
+        ));
+    }
+    events.push_str(
+        "\n/** Every event Rust pushes to the window, by name, with the type of its payload. \
+         */\n",
+    );
+    events.push_str(&format!("export type Events = {{\n{event_entries}}};\n"));
+    files.insert("events.ts".to_owned(), events);
+
     let mut index = String::from(HEADER);
     for name in &type_names {
         index.push_str(&format!("export type {{ {name} }} from \"./{name}\";\n"));
     }
     index.push_str("export type { Commands } from \"./commands\";\n");
+    index.push_str("export type { Events } from \"./events\";\n");
     files.insert("index.ts".to_owned(), index);
     files
 }
@@ -147,15 +233,21 @@ fn committed_typescript_matches_the_rust_contract() {
 #[test]
 fn the_command_list_matches_the_generated_command_map() {
     let scratch = tempfile::tempdir().expect("temporary folder");
-    let specs = command_specs(&config(scratch.path()));
-    let names: Vec<&str> = specs.iter().map(|spec| spec.name).collect();
+    let cfg = config(scratch.path());
+    let contract = contract(&cfg, false);
+    let names: Vec<&str> = contract.commands.iter().map(|spec| spec.name).collect();
     assert_eq!(names, COMMAND_NAMES);
 }
 
-/// The capability file must grant the window exactly the app's commands and nothing else:
-/// no file system, shell, HTTP, opener or other plugin permission.
+/// The permissions that let the window listen for the app's events. They grant nothing else:
+/// the window cannot emit events, and it has no window, file system, shell, HTTP or opener
+/// permission.
+const EVENT_PERMISSIONS: [&str; 2] = ["core:event:allow-listen", "core:event:allow-unlisten"];
+
+/// The capability file must grant the window exactly the app's commands and, because the app
+/// pushes events, the two permissions needed to listen for them.
 #[test]
-fn the_window_capability_grants_exactly_the_app_commands() {
+fn the_window_capability_grants_exactly_the_app_commands_and_event_listening() {
     let path = repository_root()
         .join("src-tauri")
         .join("capabilities")
@@ -178,6 +270,7 @@ fn the_window_capability_grants_exactly_the_app_commands() {
     let mut expected: Vec<String> = COMMAND_NAMES
         .iter()
         .map(|name| format!("allow-{}", name.replace('_', "-")))
+        .chain(EVENT_PERMISSIONS.map(str::to_owned))
         .collect();
     expected.sort();
 
@@ -186,4 +279,18 @@ fn the_window_capability_grants_exactly_the_app_commands() {
         capability.get("remote").is_none(),
         "no remote origin may call commands"
     );
+}
+
+/// Event names are part of the contract: the window listens for them by name.
+#[test]
+fn event_names_are_ones_tauri_accepts() {
+    let scratch = tempfile::tempdir().expect("temporary folder");
+    let cfg = config(scratch.path());
+    for (name, _) in contract(&cfg, false).events {
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_')),
+            "{name}"
+        );
+    }
 }

@@ -1,11 +1,33 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window may call Skribe's own commands and nothing else. It has no file system, shell, HTTP or opener access.",
+  "description": "The main window may call Skribe's own commands and listen for the events Rust pushes to it, and nothing else. It cannot emit events and has no window, file system, shell, HTTP or opener access.",
   "windows": ["main"],
   "permissions": [
     "allow-library-status",
     "allow-library-retry-open",
-    "allow-library-restore-snapshot"
+    "allow-library-restore-snapshot",
+    "allow-meetings-list",
+    "allow-meeting-create",
+    "allow-meeting-get",
+    "allow-meeting-update",
+    "allow-agenda-add",
+    "allow-agenda-edit",
+    "allow-agenda-remove",
+    "allow-agenda-reorder",
+    "allow-meeting-trash",
+    "allow-meeting-restore",
+    "allow-meeting-delete-permanently",
+    "allow-settings-get",
+    "allow-settings-set-section-shortcut",
+    "allow-recording-preflight",
+    "allow-recording-start",
+    "allow-recording-status",
+    "allow-recording-stop",
+    "allow-recording-recover",
+    "allow-recording-devices",
+    "allow-recording-set-devices",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
   ]
 }
