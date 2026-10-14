@@ -2,6 +2,8 @@
 //! against real files in a temporary folder.
 
 mod corruption;
+mod meetings;
 mod migration;
 mod open;
+mod recording;
 mod service;

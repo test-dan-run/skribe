@@ -25,11 +25,28 @@ pub(crate) struct Migration {
 
 /// Every schema version in order. Shipped entries are never edited or removed; schema changes
 /// are appended.
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "library_meta",
-    sql: include_str!("../migrations/0001_library_meta.sql"),
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "library_meta",
+        sql: include_str!("../migrations/0001_library_meta.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "meetings",
+        sql: include_str!("../migrations/0002_meetings.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "recording",
+        sql: include_str!("../migrations/0003_recording.sql"),
+    },
+];
+
+/// The schema this build reads and writes.
+pub fn latest_schema_version() -> u32 {
+    latest_version(MIGRATIONS)
+}
 
 pub(crate) fn latest_version(migrations: &[Migration]) -> u32 {
     migrations.last().map_or(0, |migration| migration.version)

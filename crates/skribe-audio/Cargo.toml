@@ -1,0 +1,46 @@
+[package]
+name = "skribe-audio"
+description = "Skribe audio capture: two original tracks on one timeline, written durably with bounded memory."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# A generated test signal in place of real devices, for tests and development builds only.
+# Release builds never enable it; `src-tauri` refuses to compile a release build that does.
+synthetic = []
+
+[dependencies]
+fs4.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Performance",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# The workspace forbids `unsafe`, and a forbidden lint cannot be relaxed. This crate repeats
+# the workspace's lints with `unsafe_code` denied instead, so that the one module that calls
+# Windows audio (`src/wasapi.rs`) can allow it for itself. Keep the rest in step with the root
+# Cargo.toml.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+result_large_err = "allow"
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"

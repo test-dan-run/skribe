@@ -22,7 +22,14 @@ test = false
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# Records a generated test signal instead of real devices, so the recording workflow can be
+# exercised in a development build, including in WSL. Never enabled by the installer build,
+# and `src/lib.rs` refuses to compile a release build that enables it.
+synthetic-capture = ["skribe-audio/synthetic"]
+
 [dependencies]
+skribe-audio.workspace = true
 skribe-ipc.workspace = true
 skribe-store.workspace = true
 tauri = { version = "2", features = [] }

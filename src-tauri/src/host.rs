@@ -2,36 +2,67 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
+use skribe_audio::CaptureBackend;
 use skribe_ipc::CommandError;
+use skribe_ipc::recording::RecordingService;
 use skribe_store::{LibraryService, StorageRoots};
 use tauri::{AppHandle, Manager};
 
-/// The library service for this app instance, or why it could not be set up at all.
-pub(crate) enum LibraryHost {
-    Service(Arc<LibraryService>),
+/// The services of this app instance.
+pub(crate) struct Services {
+    pub(crate) library: Arc<LibraryService>,
+    pub(crate) recording: Arc<RecordingService>,
+}
+
+/// The app's services, or why they could not be set up at all.
+pub(crate) enum Host {
+    Ready(Arc<Services>),
     SetupFailed(CommandError),
 }
 
-impl LibraryHost {
+impl Host {
     /// Resolves the storage roots and starts opening the library on its own thread, so the
     /// window appears while integrity checks and migrations run.
     pub(crate) fn start(app: &AppHandle) -> Self {
-        let service = match build_service(app) {
+        let library = match build_library(app) {
             Ok(service) => Arc::new(service),
             Err(error) => return Self::SetupFailed(error),
         };
-        let opener = Arc::clone(&service);
+        let opener = Arc::clone(&library);
         // If the thread cannot start, the first command opens the library instead.
         let _ = thread::Builder::new()
             .name("skribe-library-open".to_owned())
             .spawn(move || {
                 opener.availability();
             });
-        Self::Service(service)
+        let recording = Arc::new(RecordingService::new(
+            Arc::clone(&library),
+            capture_backend(),
+        ));
+        Self::Ready(Arc::new(Services { library, recording }))
+    }
+
+    pub(crate) fn recording(&self) -> Option<&Arc<RecordingService>> {
+        match self {
+            Self::Ready(services) => Some(&services.recording),
+            Self::SetupFailed(_) => None,
+        }
     }
 }
 
-fn build_service(app: &AppHandle) -> Result<LibraryService, CommandError> {
+/// Real devices, unless this development build was asked for the generated test signal.
+fn capture_backend() -> Arc<dyn CaptureBackend> {
+    #[cfg(feature = "synthetic-capture")]
+    {
+        Arc::new(skribe_audio::synthetic::SyntheticBackend::tone())
+    }
+    #[cfg(not(feature = "synthetic-capture"))]
+    {
+        skribe_audio::platform_backend()
+    }
+}
+
+fn build_library(app: &AppHandle) -> Result<LibraryService, CommandError> {
     let base = app
         .path()
         .app_local_data_dir()

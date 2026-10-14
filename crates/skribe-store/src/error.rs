@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use skribe_domain::LibraryId;
+use skribe_domain::{LibraryId, RecordingState};
 
 /// What state a failed migration left the database in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +94,49 @@ pub enum StoreError {
 
     #[error("the database worker has stopped")]
     WorkerStopped,
+
+    #[error("the library holds a value Skribe does not understand in {place}: {detail}")]
+    DataInvalid { place: &'static str, detail: String },
+
+    #[error("meeting {id} was not found")]
+    MeetingNotFound { id: String },
+
+    #[error("agenda item {id} was not found in the meeting")]
+    AgendaItemNotFound { id: String },
+
+    #[error("the meeting is at revision {found}, not the expected revision {expected}")]
+    RevisionConflict { expected: u32, found: u32 },
+
+    #[error("the agenda cannot change while the meeting's recording is {state}")]
+    PreparationClosed { state: RecordingState },
+
+    #[error("the meeting is in the trash")]
+    MeetingInTrash,
+
+    #[error("the meeting is not in the trash")]
+    MeetingNotInTrash,
+
+    #[error("the meeting's recording is {state}")]
+    MeetingBusy { state: RecordingState },
+
+    #[error("the agenda already has the most items allowed ({limit})")]
+    AgendaFull { limit: usize },
+
+    #[error("the new agenda order does not list each agenda item exactly once")]
+    AgendaOrderInvalid,
+
+    #[error("the meeting's recording is {from} and cannot become {to}")]
+    RecordingStateConflict {
+        from: RecordingState,
+        to: RecordingState,
+    },
+
+    #[error("could not delete the meeting's files in {}: {source}", path.display())]
+    MeetingFilesNotRemoved {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
 impl StoreError {

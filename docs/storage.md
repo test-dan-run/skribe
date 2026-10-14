@@ -31,10 +31,12 @@ library/
   db/migration-in-progress.json  present only while a migration is running
   db/set-aside-<time>/           a database that a restore replaced, kept as found
   backups/skribe-v<schema>-<time>.sqlite   database snapshots
-  audio/  derived/  trash/       created empty; used by later phases
+  audio/<meeting>/<track>.wav    one original track, with its .clock and .journal beside it
+  derived/  trash/               created empty; nothing writes here yet
 ```
 
-`<time>` is Unix time in milliseconds.
+`<time>` is Unix time in milliseconds. `<meeting>` and `<track>` are IDs. The track files are
+described in [recording.md](recording.md).
 
 ## Identity and ownership
 
@@ -83,6 +85,41 @@ If the marker is found at startup, the previous run was interrupted:
 | Unusable, and the snapshot is missing or invalid | Stops, changes nothing, offers the other snapshots |
 
 A new, empty database is given its schema without a snapshot, since there is nothing to lose.
+
+## What the database holds
+
+| Schema | Added | Tables |
+|--------|-------|--------|
+| 1 | Library identity | `library_meta` |
+| 2 | Preparing meetings | `meetings`, `agenda_items`, `settings` |
+| 3 | Recording | `tracks`, `track_health_events`; recording start and length on `meetings` |
+
+- IDs are version 7 UUIDs generated in Rust and stored in one canonical spelling.
+- A meeting has three separate state columns: recording, processing and minutes.
+- A meeting's `revision` guards its title, planned time and agenda. A change quotes the
+  revision it was made against; a change against an older one is refused and nothing is
+  overwritten.
+- The agenda can change only while the meeting's recording is in `setup`.
+- `settings` holds one row per setting, each with its own revision: the section shortcut, and
+  which device each track is recorded from. A setting that was never saved has its default.
+- Paths in the database are relative to the library folder. The app works out where a track's
+  files are from the meeting and track IDs, not from stored text.
+- A stored value the app does not recognise (an unknown state, an ID that is not an ID) is
+  reported as an error. It is never guessed around or rewritten.
+
+## Trash and deletion
+
+- Moving a meeting to the trash sets a flag on the meeting. Nothing is deleted and nothing is
+  moved: its rows and its audio stay where they are. Restoring clears the flag. The `trash/`
+  folder is not used.
+- A meeting in the trash cannot be edited, and a meeting that is being recorded cannot be
+  moved to the trash.
+- Permanent deletion is a second, separately confirmed action, offered only for a meeting in
+  the trash. It removes the meeting's `audio/` and `derived/` folders and then its rows. If a
+  file cannot be removed, the meeting stays in the trash so the deletion can be tried again,
+  and no folder is left without a meeting that owns it.
+- Database snapshots taken before a deletion still contain the meeting's title and agenda, but
+  not its audio. The confirmation says so.
 
 ## Snapshots and restore
 

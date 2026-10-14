@@ -57,6 +57,7 @@ pub enum OpenNoticeKind {
     LibraryCreated,
     LibraryUpdated,
     InterruptedUpdateRecovered,
+    RecordingsInterrupted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -223,6 +224,24 @@ fn open_notices(report: &OpenReport) -> Vec<OpenNotice> {
             message,
         });
     }
+    if report.interrupted_recordings > 0 {
+        let message = if report.interrupted_recordings == 1 {
+            "A recording was still running when Skribe last closed. Its audio was kept. Open \
+             the meeting marked \u{201c}Recording interrupted\u{201d} to recover it."
+                .to_owned()
+        } else {
+            format!(
+                "{} recordings were still running when Skribe last closed. Their audio was \
+                 kept. Open each meeting marked \u{201c}Recording interrupted\u{201d} to \
+                 recover it.",
+                report.interrupted_recordings
+            )
+        };
+        notices.push(OpenNotice {
+            kind: OpenNoticeKind::RecordingsInterrupted,
+            message,
+        });
+    }
     notices
 }
 
@@ -263,7 +282,10 @@ mod tests {
             panic!("expected a ready library");
         };
 
-        assert_eq!(library.schema_version, 1);
+        assert_eq!(
+            library.schema_version,
+            skribe_store::latest_schema_version()
+        );
         assert_eq!(library.created_by_app_version, "0.0.0-test");
         assert_eq!(
             library.locations.library,
@@ -370,14 +392,21 @@ mod tests {
                 to: 2,
                 snapshot: Some("skribe-v1-2.sqlite".into()),
             }),
+            interrupted_recordings: 2,
         });
         let kinds: Vec<_> = updated.iter().map(|notice| notice.kind).collect();
         assert_eq!(
             kinds,
             vec![
                 OpenNoticeKind::InterruptedUpdateRecovered,
-                OpenNoticeKind::LibraryUpdated
+                OpenNoticeKind::LibraryUpdated,
+                OpenNoticeKind::RecordingsInterrupted
             ]
+        );
+        assert!(
+            updated[2]
+                .message
+                .starts_with("2 recordings were still running")
         );
         assert!(updated[0].message.contains("skribe-v1-1.sqlite"));
         assert!(updated[0].message.contains("set-aside-1"));
@@ -391,6 +420,7 @@ mod tests {
                 to: 1,
                 snapshot: None,
             }),
+            interrupted_recordings: 0,
         });
         let kinds: Vec<_> = created.iter().map(|notice| notice.kind).collect();
         assert_eq!(kinds, vec![OpenNoticeKind::LibraryCreated]);
